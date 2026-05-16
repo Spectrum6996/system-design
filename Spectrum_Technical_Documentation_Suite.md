@@ -19,16 +19,16 @@
 | Product purpose | Safety-first, identity-inclusive dating & community app for LGBTQ+ users in India, US, UK |
 | MVP goal | Ship the PRD's Must-Have features as a single monolithic Node.js service on Railway, at < $80/month for the first 5K users |
 | Primary user roles | End user (free), End user (Spectrum+ premium), Moderator, Trust & Safety Lead, Support Agent, Read-only Analyst, Super Admin |
-| Functional pillars | Auth (OTP+JWT), Inclusive identity, Geohash discovery & matching, E2EE chat (Signal Protocol), Safety (block/report/panic/CSAM), Privacy (incognito, contact block, face blur), Billing (IAP+Stripe), Push notifications, Admin/T&S dashboard |
+| Functional pillars | Auth Google OAuth, Inclusive identity, Geohash discovery & matching, E2EE chat (Signal Protocol), Safety (block/report/CSAM), Privacy (incognito, contact block, face blur), Billing (IAP+Stripe), Push notifications, Admin/T&S dashboard |
 | Non-functional requirements | p99 latency targets per endpoint (Section 15), 99.9% uptime, GDPR + DPDP + CCPA compliance, zero plaintext PII on server beyond what auth needs, mandatory E2EE, server-side premium gating |
-| Core technology stack | Node 20 LTS, TypeScript, Fastify 4, Prisma 5, Neon PostgreSQL 15, Upstash Redis, AWS S3, Railway.app, Flutter 3 mobile, Signal Protocol (libsignal-node), Twilio Verify, FCM + APNs, Stripe + IAP |
-| Third-party integrations | Twilio Verify (OTP), AWS S3 (media), Stripe + Apple App Store Server API + Google Play Developer API (billing), FCM + APNs (push), Sentry (errors), BetterUptime (uptime), Resend (transactional email), Cloudflare (DNS+TLS), PhotoDNA/NCMEC (CSAM hashes) |
+| Core technology stack | Node 24 LTS, TypeScript 6, Fastify 5, Prisma 7, Neon PostgreSQL 18, Upstash Redis, AWS S3, Railway.app, Flutter 3 mobile, Signal Protocol (libsignal-node), Google OAuth, FCM + APNs, Stripe + IAP |
+| Third-party integrations | Google OAuth, AWS S3 (media), Stripe + Apple App Store Server API + Google Play Developer API (billing), FCM + APNs (push), Sentry (errors), BetterUptime (uptime), Resend (transactional email), Cloudflare (DNS+TLS), PhotoDNA/NCMEC (CSAM hashes) |
 | Data entities (13) | users, identity_profiles, user_photos, user_locations, discovery_filters, swipes, matches, conversations, messages, blocks, reports, subscriptions, devices (+ derived: auth_sessions, consent_log, notification_log, admin_users, moderation_actions) |
 | Constraints | Server must never see plaintext chat or exact GPS; client-only Signal private keys; India data resident in ap-south-1 equivalent; under-18 hard blocked at DB CHECK; moderator MUST NOT see chat content; OWASP Top 10 baseline; Railway env vars for all secrets |
 | Deployment target | Railway.app (single service), Neon (PostgreSQL), Upstash (Redis), AWS S3 (ap-south-1 / us-east-1). 1 replica baseline, scales horizontally |
 | Migration trigger | Any module > 200 req/sec sustained, team > 8 engineers, or 50K+ MAU → extract modules to microservices using `EXTRACT_BOUNDARY` markers |
 
-### Open Questions (carried forward — not blocking)
+### Open Questions (carried forward — not blocking) Not now
 
 1. **Voice/video call roadmap.** Voice calling is implied (voice notes are MVP) but real voice calling is Phase 2. Confirm no MVP requirement for in-app calling so we can skip TURN/STUN infra in v1.
 2. **Boost economics.** "Profile Boost" exists in premium gates but is not priced or scoped (duration, multiplier window, cool-down). Assumed: 30-minute window, 2× scoring multiplier, 1 free boost per week for premium users.
@@ -50,7 +50,7 @@ These additions are inspired by Tinder, Bumble, Grindr, HER, Hinge, and Feeld bu
 - **OpenTelemetry** wired from day 1 (Sentry already ingests), so distributed tracing is free if we extract modules later.
 - **Feature flags** via Unleash OSS or LaunchDarkly free tier — gate Boost, premium filters, and risky migrations.
 - **Outbox table** for cross-module side effects (push, billing webhooks) so internal calls can be replayed if Notification fails — critical when extracting to microservices.
-- **HMAC-SHA256 anti-bot on `/auth/otp/request`** — Cloudflare Turnstile widget on mobile to suppress SMS pumping fraud (a hard-learned lesson from every dating app).
+- **Cloudflare Turnstile on auth endpoints** — bot-suppression widget on mobile sign-in to prevent automated account creation abuse.
 - **Tombstoned soft delete with cryptographic shredding** for GDPR/DPDP: instead of `DELETE`, rotate per-user encryption envelope key in KMS so plaintext is unrecoverable, then schedule physical delete.
 - **Shadow-ban primitive** in `users.status` (`shadow_banned`) so T&S can degrade abusers' reach without alerting them.
 
@@ -61,7 +61,7 @@ These additions are inspired by Tinder, Bumble, Grindr, HER, Hinge, and Feeld bu
 ## 1. System Overview
 
 ### Executive Summary
-Spectrum is a mobile-first dating and community app built specifically for LGBTQ+ users. The MVP delivers OTP-authenticated registration, an inclusive identity model (50+ genders, 20+ orientations, custom pronouns), location-based discovery with privacy-preserving geohashes, mutual-match flow, end-to-end-encrypted chat over the Signal Protocol, a strict safety stack (block, report, panic button, CSAM blocking), a privacy stack (face blur, contact block, incognito), Spectrum+ subscription monetisation via IAP and Stripe, and a Trust & Safety admin console. The backend is a single Node.js/TypeScript Fastify process on Railway, internally divided into ten domain modules, backed by Neon PostgreSQL, Upstash Redis, and AWS S3. The architecture targets < $80/month operating cost up to ~5K MAU and is designed to extract cleanly to microservices once any module sustains > 200 req/sec or MAU exceeds ~50K.
+Spectrum is a mobile-first dating and community app built specifically for LGBTQ+ users. The MVP delivers Google OAuth registration, an inclusive identity model (50+ genders, 20+ orientations, custom pronouns), location-based discovery with privacy-preserving geohashes, mutual-match flow, end-to-end-encrypted chat over the Signal Protocol, a strict safety stack (block, report, panic button, CSAM blocking), a privacy stack (face blur, contact block, incognito), Spectrum+ subscription monetisation via IAP and Stripe, and a Trust & Safety admin console. The backend is a single Node.js/TypeScript Fastify process on Railway, internally divided into ten domain modules, backed by Neon PostgreSQL, Upstash Redis, and AWS S3. The architecture targets < $80/month operating cost up to ~5K MAU and is designed to extract cleanly to microservices once any module sustains > 200 req/sec or MAU exceeds ~50K.
 
 ### Goals
 - Ship every PRD Must-Have feature at production quality on a single-service deployment.
@@ -127,7 +127,7 @@ Spectrum is a mobile-first dating and community app built specifically for LGBTQ
 │   ┌──────────┐ ┌──────────┐ ┌────────────┐ ┌──────────┐ ┌─────────┐  │
 │   │ modules/ │ │ modules/ │ │  modules/  │ │ modules/ │ │modules/ │  │
 │   │   auth   │ │   user   │ │ discovery  │ │  match   │ │  chat   │  │
-│   │OTP+JWT   │ │profile+  │ │geohash feed│ │like/pass │ │WSS+E2EE │  │
+│   │OAuth+JWT │ │profile+  │ │geohash feed│ │like/pass │ │WSS+E2EE │  │
 │   │devices   │ │identity  │ │filters     │ │match SM  │ │media key│  │
 │   └────┬─────┘ └────┬─────┘ └─────┬──────┘ └────┬─────┘ └────┬────┘  │
 │        │            │             │              │            │      │
@@ -149,8 +149,8 @@ Spectrum is a mobile-first dating and community app built specifically for LGBTQ
    └──────────────┘    └──────────────┘    └─────────────┘
 
    ┌──────────────┐    ┌──────────────┐    ┌─────────────┐
-   │ Twilio Verify│    │FCM v1 + APNs │    │Stripe + IAP │
-   │   (OTP)      │    │(push)        │    │(billing)    │
+   │ Google OAuth  │    │FCM v1 + APNs │    │Stripe + IAP │
+   │   (auth)      │    │(push)        │    │(billing)    │
    └──────────────┘    └──────────────┘    └─────────────┘
 
    ┌──────────────┐    ┌──────────────┐    ┌─────────────┐
@@ -163,7 +163,7 @@ Spectrum is a mobile-first dating and community app built specifically for LGBTQ
 
 | Module | Responsibility |
 | --- | --- |
-| `auth` | OTP issuance/verify, JWT mint, refresh rotation, device registry, logout, session lockout |
+| `auth` | Google OAuth sign-in, JWT mint, refresh rotation, device registry, logout, session lockout |
 | `user` | Profile CRUD, identity options, visibility settings, account export, deletion pipeline |
 | `discovery` | Geohash feed query, filters, scoring, contact-block enforcement |
 | `match` | Swipe state machine, mutual-match creation, daily-like quotas, unmatch, undo (premium) |
@@ -177,8 +177,8 @@ Spectrum is a mobile-first dating and community app built specifically for LGBTQ
 ### Data Flow Narratives
 
 **Sign-up + first feed load (cold start)**
-1. Mobile client posts `/auth/otp/request` → middleware: Turnstile + per-phone Upstash rate limit → `auth.requestOtp()` → Twilio Verify.
-2. Twilio delivers SMS → user enters code → `/auth/otp/verify` → `auth.verifyOtp()` validates via Twilio → if first time, `user.createUser()` (DB write, `is_verified=false`); JWT pair signed RS256.
+1. Mobile client initiates Google OAuth → receives `id_token` → posts `/auth/google` → middleware: Turnstile + per-IP Upstash rate limit → `auth.googleSignIn()` verifies `id_token` with Google.
+2. On first time, `user.createUser()` (DB write, `is_verified=true`); JWT pair signed RS256.
 3. Client uploads geohash via `/users/location` → `discovery.upsertLocation()` writes `user_locations` + updates Upstash geohash set.
 4. Client requests `/discovery/feed?limit=50` → JWT middleware → `discovery.feed(userId)` → reads geohash, fetches 9 adjacent prefixes from Upstash, runs PostgreSQL GIN query with `open_to @> caller_gender`, filters swipes+blocks (loaded into Redis Set at session start), scores, returns 50 cards.
 
@@ -202,10 +202,10 @@ Spectrum is a mobile-first dating and community app built specifically for LGBTQ
 ### External Integration Map
 
 ```
-┌──────────────┐  OTP SMS        ┌────────────┐
-│ modules/auth │ ───────────────▶│  Twilio    │
-└──────────────┘                  │  Verify    │
-                                  └────────────┘
+┌──────────────┐  id_token verify ┌────────────┐
+│ modules/auth │ ────────────────▶│  Google    │
+└──────────────┘                   │  OAuth     │
+                                   └────────────┘
 
 ┌──────────────┐  presigned URL  ┌────────────┐
 │modules/media │ ───────────────▶│  AWS S3    │
@@ -244,38 +244,38 @@ Spectrum is a mobile-first dating and community app built specifically for LGBTQ
 
 | Layer | Technology | Version | Justification |
 | --- | --- | --- | --- |
-| Mobile app | Flutter / Dart | 3.x | One codebase for iOS+Android keeps a 2-engineer mobile team viable; mature Signal Protocol bindings. |
-| State mgmt | Riverpod | 2.x | Compile-time safety vs. Provider; testable; widely adopted. |
-| Routing | GoRouter | 14.x | Deep links + nested routes required for panic-mode decoy screen + push deep links. |
+| Mobile app | Flutter / Dart | 3.41 / 3.11 | One codebase for iOS+Android keeps a 2-engineer mobile team viable; Impeller-by-default on iOS + Android (API 29+); UIScene lifecycle support. |
+| State mgmt | Riverpod | 3.x | Major version bump from 2.x — unified API, code-gen is the preferred path; compile-time safety vs. Provider; testable; widely adopted. |
+| Routing | GoRouter | 14.x | Still the latest major; maintained by the Flutter team; deep links + nested routes required for panic-mode decoy screen + push deep links. |
 | Mobile HTTP | Dio | 5.x | Interceptors for JWT refresh, retry, request signing. |
 | Mobile secure store | flutter_secure_storage | 9.x | Keychain (iOS) / Android Keystore for JWTs and Signal private keys. |
 | Mobile local DB | sqflite | 2.x | Encrypted message cache; large message history without re-fetch. |
-| Geo | geolocator | 12.x | Approximate accuracy supported; battery-efficient. |
+| Geo | geolocator | 13.x | Bumped from 12.x; approximate accuracy supported; battery-efficient. |
 | Push (mobile) | firebase_messaging | 15.x | One SDK handles APNs + FCM. |
 | Crypto (mobile) | libsignal-client (Dart bindings) | latest | Official Signal implementation; battle-tested. |
-| Backend lang | Node.js | 20 LTS | Strong async I/O fit for WebSocket + REST; same language across team. |
-| Type system | TypeScript | 5.x | Compile-time guarantees critical for cross-module function calls. |
-| HTTP + WS framework | Fastify | 4.x | Fastest Node framework benchmark; first-class plugin model; @fastify/websocket. |
-| ORM | Prisma | 5.x | Parameterized queries by default; great migration tooling; type-safe. |
-| Validation | Zod | 3.x | Inferred TS types from schemas; uniform validation across REST + WS. |
-| Primary DB | Neon (PostgreSQL) | 15 | Serverless Postgres with PgBouncer; scale-to-zero saves cost; per-branch databases ideal for previews. |
+| Backend lang | Node.js | 24 LTS | Current Active LTS (until Oct 2026, then maintenance to Apr 2028); strong async I/O fit for WebSocket + REST; same language across team. |
+| Type system | TypeScript | 6.0 | Released 23 Mar 2026 — last release on the JS-based compiler before TS 7 (Go-based); strict-mode on by default; compile-time guarantees critical for cross-module calls. |
+| HTTP + WS framework | Fastify | 5.8.5 | v5 requires Node 20+, aligns with Node 24 LTS; fastest Node framework benchmark; first-class plugin model; @fastify/websocket. |
+| ORM | Prisma | 7.x | Rust-free WASM-based query compiler; ~70% faster type checks; smaller generated types; parameterized queries by default; great migration tooling. Note: MongoDB not yet supported in v7. |
+| Validation | Zod | 4.4.3 | ~14× faster string parsing, ~57% smaller core bundle, new z.registry() metadata API; inferred TS types from schemas; consider zod/mini (~1.9KB gzipped) for client-side validation paths. |
+| Primary DB | Neon (PostgreSQL) | 18 | Serverless Postgres with PgBouncer; scale-to-zero saves cost; per-branch databases ideal for previews. |
 | Cache + queues | Upstash Redis | — | HTTP API, no TCP connections to manage; serverless free tier covers MVP. |
 | Object storage | AWS S3 | — | Presigned URLs let client upload directly; SSE-S3 at rest; region selection for data residency. |
-| Discovery search | PostgreSQL GIN + pg_trgm | 15 | Replaces Elasticsearch (~$773/mo) at < 50K profiles. Plan B: Meilisearch self-host. |
-| Auth | JWT RS256 + Twilio Verify | — | Asymmetric so all modules verify with public key only; Twilio offloads SMS reliability. |
+| Discovery search | PostgreSQL GIN + pg_trgm | 18 | Bumped with primary DB; replaces Elasticsearch (~$773/mo) at < 50K profiles. Plan B: Meilisearch self-host. |
+| Auth | JWT RS256 + Google OAuth | — | Asymmetric so all modules verify with public key only; Google OAuth for frictionless, passwordless sign-in without SMS dependency. |
 | E2EE | Signal Protocol (libsignal-node) | latest | Forward + future secrecy; industry standard; non-negotiable per TRD. |
 | Push (server) | firebase-admin + node-apn | latest | FCM v1 (Android) + APNs HTTP/2 (iOS). |
-| Payments | Stripe + StoreKit 2 + Play Billing 6 | latest | Web (Stripe), iOS, Android — all three required. |
+| Payments | Stripe + StoreKit 2 + Play Billing 7 | latest | Web (Stripe), iOS, Android — all three required; Play Billing 6 reached deadline, Billing 7 is now required for new Play submissions. |
 | Email | Resend | — | Free 3K/month; clean DX. |
 | Deploy | Railway.app | — | Dockerfile auto-build, WSS native, env-var secrets, ~2-min deploys. |
-| IaC | Terraform (S3, IAM, KMS) | 1.x | Only AWS resources are Terraformed; Railway uses railway.toml. |
+| IaC | Terraform | 1.15.x | Ephemeral resources + provider-defined functions now stable; only AWS resources are Terraformed; Railway uses railway.toml. Consider OpenTofu 1.9.x as a license-clean alternative if BUSL is a concern. |
 | CI/CD | GitHub Actions + Railway auto-deploy | — | Free tier covers PR checks + main-branch deploys. |
 | Errors | Sentry | — | Free Developer tier; OpenTelemetry-compatible. |
 | Uptime | BetterUptime | — | 3-min probes on `/health`. |
 | Tracing/metrics | OpenTelemetry → Sentry Performance | — | Future-proofs distributed tracing for microservice split. |
 | Feature flags | Unleash OSS or LaunchDarkly free | — | Gate Boost, premium filters, risky migrations. |
 | WAF + DNS | Cloudflare | — | DDoS, TLS, IP allowlists for admin. |
-| Anti-abuse | Cloudflare Turnstile | — | Suppresses SMS pumping attacks on `/auth/otp/request`. |
+| Anti-abuse | Cloudflare Turnstile | — | Suppresses bot and abuse attacks on auth endpoints. |
 
 ---
 
@@ -514,8 +514,7 @@ CREATE TABLE outbox (
 
 | Method | Path | Auth | Request Body | Response (200/2xx) | Notes |
 | --- | --- | --- | --- | --- | --- |
-| POST | `/v1/auth/otp/request` | Public + Turnstile | `{ phone }` | `{ challenge_id, expires_at }` | 5/hour/phone. SMS via Twilio Verify. |
-| POST | `/v1/auth/otp/verify` | Public | `{ phone, code }` | `{ access, refresh, user }` | 10 attempts → 60-min lockout. |
+| POST | `/v1/auth/google` | Public + Turnstile | `{ id_token }` | `{ access, refresh, user }` | Google OAuth id_token verified server-side; 10 attempts/IP/hour → 60-min lockout. |
 | POST | `/v1/auth/refresh` | Refresh | `{ refresh }` | `{ access, refresh }` | Single-use rotation; family invalidation on reuse. |
 | POST | `/v1/auth/logout` | JWT | `{}` | `204` | Removes refresh + device push token. |
 | GET | `/v1/users/:id` | JWT | — | `User` | 404 if blocked or non-existent. |
@@ -579,7 +578,7 @@ CREATE TABLE outbox (
 
 | Endpoint Group | Free | Premium | Window |
 | --- | --- | --- | --- |
-| `POST /auth/otp/request` | 5 | 5 | per phone, per hour |
+| `POST /auth/google` | 10 | 10 | per IP, per hour |
 | `POST /matches/like` | 10 | unlimited | per user, per day |
 | `GET /discovery/feed` | 60 | 120 | per user, per hour |
 | `POST /chat/*` | 200 | 500 | per user, per hour |
@@ -611,12 +610,12 @@ Backed by an Upstash Lua-script token bucket. Responses include `RateLimit-Limit
 ## 6. System Components (Module Design)
 
 ### 6.1 modules/auth
-- **Purpose:** OTP-based identity proof, JWT lifecycle, device-bound refresh tokens.
-- **Sub-components:** `routes.ts`, `service.ts`, `repository.ts`, `otp.ts` (Twilio wrapper), `jwt.ts` (RS256 with kid header), `device.ts`.
+- **Purpose:** Google OAuth identity verification, JWT lifecycle, device-bound refresh tokens.
+- **Sub-components:** `routes.ts`, `service.ts`, `repository.ts`, `oauth.ts` (Google id_token verifier), `jwt.ts` (RS256 with kid header), `device.ts`.
 - **Interfaces (internal):** `auth.verifyJWT(token)`, `auth.requireRole(roles[])`, `auth.invalidateFamily(userId)`.
-- **Dependencies:** Twilio Verify, Upstash (rate limits + lockouts), Prisma.
+- **Dependencies:** Google OAuth (id_token verification), Upstash (rate limits + lockouts), Prisma.
 - **State owned:** `users (auth fields)`, `devices`, `auth_sessions`.
-- **Edge cases:** Phone re-registration (transfer of accounts disabled — duplicate phone returns 409); SIM swap (force re-OTP after JWT age > 24h on suspicious device fingerprint); refresh-token reuse (invalidate entire family, force re-login).
+- **Edge cases:** Duplicate Google account (same `google_sub` on re-registration returns existing user); Google token expiry (force re-OAuth after JWT age > 24h on suspicious device fingerprint); refresh-token reuse (invalidate entire family, force re-login).
 
 ### 6.2 modules/user
 - **Purpose:** Profile, identity, account lifecycle, consent log, deletion pipeline.
@@ -708,16 +707,13 @@ Backed by an Upstash Lua-script token bucket. Responses include `RateLimit-Limit
 ### 7.2 Authentication Flow (step-by-step)
 
 ```
-1. App → /v1/auth/otp/request { phone }
-   ├─ Cloudflare Turnstile token verified
-   ├─ Upstash rate limit: 5/h/phone (else 429)
-   └─ Twilio Verify sends SMS
-
-2. User enters code → App → /v1/auth/otp/verify { phone, code }
-   ├─ Upstash attempt counter: ≤10 (else 429 + 60-min lockout)
-   ├─ Twilio Verify validates server-side
-   ├─ If new user: insert users + identity (status=registering) + consent_log
-   └─ Mint access JWT (RS256, 15min) + refresh (opaque, 30d) bound to a new family_id
+1. App initiates Google OAuth → receives id_token from Google
+   └─ App → /v1/auth/google { id_token }
+      ├─ Cloudflare Turnstile token verified
+      ├─ Upstash rate limit: 10/h/IP (else 429)
+      ├─ Google id_token verified server-side (audience + expiry check)
+      ├─ If new user: insert users + identity (status=registering) + consent_log
+      └─ Mint access JWT (RS256, 15min) + refresh (opaque, 30d) bound to a new family_id
 
 3. App stores access in memory + refresh in flutter_secure_storage (Keychain / Keystore)
 
@@ -739,12 +735,12 @@ Backed by an Upstash Lua-script token bucket. Responses include `RateLimit-Limit
 
 | Role | Endpoints | Notes |
 | --- | --- | --- |
-| **anonymous** | `/auth/otp/*`, `/users/identity/options`, `/health`, billing webhooks | Public surfaces; rate-limited heavily. |
+| **anonymous** | `/auth/google`, `/users/identity/options`, `/health`, billing webhooks | Public surfaces; rate-limited heavily. |
 | **user (free)** | All `/v1/*` except `/admin/*`, `/matches/undo`, premium gates | Limits enforced (likes/day, filters). |
 | **user (premium)** | Same + premium gated endpoints | Server checks `users.is_premium`. |
 | **moderator** | `/admin/reports/*`, `/admin/users/search`, `/admin/users/:id`, `/admin/actions/*` | NEVER message content endpoints. |
 | **trust_safety_lead** | All moderator perms + policy config + SLA dashboards | |
-| **support_agent** | `/admin/users/:id` (no photos, no full PII) + `/admin/users/:id/reset-otp` | |
+| **support_agent** | `/admin/users/:id` (no photos, no full PII) + `/admin/users/:id/force-logout` | |
 | **readonly_analyst** | `/admin/metrics/*` (anonymised) | Read-only. |
 | **super_admin** | All admin endpoints + `/admin/team/*` | Hardware FIDO2 required. |
 
@@ -753,7 +749,7 @@ Backed by an Upstash Lua-script token bucket. Responses include `RateLimit-Limit
 - **At rest:** Neon Postgres AES-256 (managed). Upstash AES-256. S3 SSE-S3 (or SSE-KMS for India region if regulator audit demands). E2EE messages — only ciphertext stored.
 - **Secrets:** Railway encrypted env vars. **Zero secrets in code or Git.** Pre-commit hook + `git-secrets` scan. KMS-backed envelope keys for cryptographic shredding on GDPR delete.
 - **PII handling:**
-  - Phone numbers stored as raw only for OTP path; contact-block phones are **HMAC-SHA256 client-side** before upload (server holds hashes only).
+  - Google `sub` (subject identifier) stored for account linkage; contact-block phones are **HMAC-SHA256 client-side** before upload (server holds hashes only).
   - Birth date stored as `DATE` (not exact timestamp) — age is computed; year-only display option in UI.
   - Exact GPS coordinates **never** leave device — only precision-7 geohash.
 
@@ -775,7 +771,7 @@ Backed by an Upstash Lua-script token bucket. Responses include `RateLimit-Limit
 | A04 Insecure Design | Threat model + STRIDE pass during architecture review; privacy-by-default; under-18 hard CHECK; geohash > exact coords. |
 | A05 Security Misconfiguration | Terraform IaC for AWS; Railway env-vars; CSP, HSTS, X-Content-Type-Options, Referrer-Policy headers set globally; no defaults left. |
 | A06 Vulnerable & Outdated Components | Renovate bot bumps deps weekly; Snyk SCA blocks high/critical CVEs in CI; SBOM generated by syft. |
-| A07 Auth Failures | 15-min JWT, single-use refresh, family invalidation on reuse, lockout after 10 OTP fails, Turnstile on OTP request, optional biometric step-up on app open. |
+| A07 Auth Failures | 15-min JWT, single-use refresh, family invalidation on reuse, per-IP lockout after 10 failed Google OAuth attempts, Turnstile on `/auth/google`, optional biometric step-up on app open. |
 | A08 Software & Data Integrity | Signed Docker images (cosign), GitHub branch protection, mandatory PR review, deploy approval gate. |
 | A09 Logging & Monitoring Failures | Sentry + structured Pino logs + immutable audit trail in `moderation_actions` + PagerDuty escalations. |
 | A10 SSRF | Server only fetches its own presigned S3 URLs; outbound URL allowlist enforced by `undici` interceptor. |
@@ -824,7 +820,7 @@ Backed by an Upstash Lua-script token bucket. Responses include `RateLimit-Limit
    └─────────────────┘ └─────────────────┘ └─────────────────┘
 
    Shared services (no PII): Sentry · BetterUptime · Resend · Stripe ·
-   Apple SS · Google Play Dev API · FCM · APNs · Twilio Verify
+   Apple SS · Google Play Dev API · FCM · APNs · Google OAuth
 ```
 
 ### 8.3 Environment Matrix
@@ -945,7 +941,7 @@ Daily data growth at 5K MAU: ~50 MB chat ciphertext + ~1 GB photos. Neon storage
 
 ### 10.1 Logging
 - **Format:** JSON via Pino. Required fields: `ts`, `level`, `request_id`, `user_id` (when authenticated), `module`, `event`, `latency_ms`, `status_code`.
-- **PII rules:** never log phone numbers, OTP codes, JWTs, ciphertext, S3 keys with user identifiers, or geohashes longer than 5 chars.
+- **PII rules:** never log Google id_tokens, JWTs, ciphertext, S3 keys with user identifiers, or geohashes longer than 5 chars.
 - **Levels:** `trace` (dev only), `debug` (preview only), `info` (default), `warn`, `error`, `fatal`.
 - **Pipelines:** stdout → Railway log drain → Sentry Logs (free tier).
 
@@ -957,14 +953,14 @@ Daily data growth at 5K MAU: ~50 MB chat ciphertext + ~1 GB photos. Neon storage
 | `ws_message_dispatch_ms` | histogram | direction |
 | `db_query_duration_ms` | histogram | module, operation |
 | `outbox_pending` | gauge | kind |
-| `auth_otp_attempts_total` | counter | result |
+| `auth_google_attempts_total` | counter | result |
 | `safety_reports_total` | counter | severity |
 | `match_likes_total` | counter | premium |
 | `notif_dispatch_total` | counter | platform, result |
 | `chat_active_ws_connections` | gauge | — |
 
 ### 10.3 Tracing
-- OpenTelemetry SDK in Fastify, exporting OTLP → Sentry Performance. Every request has a trace; spans for DB, Redis, S3, Twilio, FCM/APNs, Stripe.
+- OpenTelemetry SDK in Fastify, exporting OTLP → Sentry Performance. Every request has a trace; spans for DB, Redis, S3, Google OAuth, FCM/APNs, Stripe.
 - Trace IDs propagated to Sentry errors so a single `request_id` joins logs + traces + errors.
 
 ### 10.4 Alerting
@@ -1027,10 +1023,10 @@ Daily data growth at 5K MAU: ~50 MB chat ciphertext + ~1 GB photos. Neon storage
 
 ### 11.3 Integration Boundaries
 - **Real:** Postgres (testcontainers), Redis (testcontainers), Prisma — these are the system's truth.
-- **Mocked:** Twilio Verify (stub OTP `000000`), FCM/APNs (record-only), S3 (LocalStack), Apple/Google IAP (fixture receipts), PhotoDNA (offline hash list).
+- **Mocked:** Google OAuth (stub id_token with fixed `sub`), FCM/APNs (record-only), S3 (LocalStack), Apple/Google IAP (fixture receipts), PhotoDNA (offline hash list).
 
 ### 11.4 E2E Critical Journeys (Patrol)
-1. Sign-up with phone OTP → identity → first photo → feed loads.
+1. Sign-up with Google OAuth → identity → first photo → feed loads.
 2. Like a profile → mutual match → push notification (silent assert via mock) → open conversation.
 3. Send and receive E2EE text + image messages on 2 emulators.
 4. Block from chat → conversation disappears both sides within 500 ms.
@@ -1041,7 +1037,7 @@ Daily data growth at 5K MAU: ~50 MB chat ciphertext + ~1 GB photos. Neon storage
 
 ### 11.5 Performance Testing
 - **k6** load script, run pre-launch and weekly thereafter against staging.
-- Scenarios: `feed_browse` (60 rph/user × 1 K users), `match_flow` (likes + push), `chat_burst` (100 msg/min × 200 users), `auth_storm` (OTP 5/h cap stress).
+- Scenarios: `feed_browse` (60 rph/user × 1 K users), `match_flow` (likes + push), `chat_burst` (100 msg/min × 200 users), `auth_storm` (Google OAuth 10/h/IP cap stress).
 - **Pass criteria:** all SLOs in TRD §15.1 met at 2× expected Day-1 load.
 
 ### 11.6 Test Data Management
@@ -1066,7 +1062,7 @@ spectrum/
 │  │  │  │  ├─ routes.ts
 │  │  │  │  ├─ service.ts
 │  │  │  │  ├─ repository.ts
-│  │  │  │  ├─ otp.ts
+│  │  │  │  ├─ oauth.ts
 │  │  │  │  ├─ jwt.ts
 │  │  │  │  ├─ types.ts
 │  │  │  │  └─ __tests__/
@@ -1186,7 +1182,7 @@ Scopes: module names (`auth`, `match`, `chat`, ...) or `infra`, `mobile`, `db`.
 | # | Risk | Likelihood | Impact | Mitigation | Owner |
 | --- | --- | --- | --- | --- | --- |
 | 1 | Single-replica Railway monolith outage cascades to all features (chat, match, auth) | Medium | High | Auto-restart on failure; BetterUptime + PagerDuty; deploy multi-replica at first sign of WS or CPU pressure; rollback automation | DevOps Lead |
-| 2 | SMS pumping fraud inflating Twilio Verify costs | Medium | High | Cloudflare Turnstile on `/auth/otp/request`; per-IP and per-phone rate limits in Upstash; Twilio's geo + carrier blocklists | Security Eng |
+| 2 | Automated account creation / bot sign-ups via Google OAuth | Low | Medium | Cloudflare Turnstile on `/auth/google`; per-IP rate limits in Upstash; Google's own OAuth abuse detection | Security Eng |
 | 3 | Moderator over-reach attempts to access chat content | Low | Critical | Chat tables hold only ciphertext; admin API has no endpoint that returns plaintext; immutable audit log; quarterly access review | T&S Lead |
 | 4 | E2EE key loss when user reinstalls (Signal private keys in Keychain only) | High | Medium (UX) | Documented "messages don't migrate on reinstall" UX; provide encrypted iCloud/Google Drive backup of identity key as Phase 1.5 enhancement | Mobile Lead |
 | 5 | Vendor lock-in to Neon (proprietary Postgres extensions, branching) | Medium | Medium | Stick to vanilla PG features; document migration playbook to AWS RDS; quarterly export test | Backend Lead |
@@ -1315,7 +1311,7 @@ Scopes: module names (`auth`, `match`, `chat`, ...) or `infra`, `mobile`, `db`.
 4. **Security:** approve refresh-token family-invalidation policy as written; approve Tailscale + Cloudflare WAF combo for admin.
 5. **DevOps:** approve multi-region production stack rollout calendar tied to EU + India launches.
 6. **Mobile:** decide on Signal identity-key backup story (iCloud/Drive encrypted blob) — Phase 1 or Phase 1.5.
-7. **Finance:** confirm budget envelope and credit-programme application status (Neon, Railway, Upstash, Twilio, Sentry).
+7. **Finance:** confirm budget envelope and credit-programme application status (Neon, Railway, Upstash, Sentry).
 8. **Legal:** DPO + Grievance Officer appointment dates locked to market launch dates.
 
 ---
